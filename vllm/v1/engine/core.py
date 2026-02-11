@@ -986,6 +986,15 @@ class EngineCoreProc(EngineCore):
                 # Set data parallel rank for this engine process.
                 parallel_config.data_parallel_rank = dp_rank
                 engine_core = DPEngineCoreProc(*args, **kwargs)
+            elif data_parallel and parallel_config.nnodes_within_dp > 1:
+                # Multi-node replica: preserve dp_size so workers compute
+                # correct global ranks and form cross-node sub-groups via
+                # torch.distributed. Uses EngineCoreProc (not
+                # DPEngineCoreProc) so replicas still run independently
+                # without DP wave coordination.
+                parallel_config.data_parallel_rank = dp_rank
+                engine_core = EngineCoreProc(*args, engine_index=dp_rank,
+                                             **kwargs)
             else:
                 # Non-MoE DP ranks are completely independent, so treat like DP=1.
                 # Note that parallel_config.data_parallel_index will still reflect

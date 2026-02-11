@@ -209,31 +209,39 @@ The `MultiprocExecutor._post_init_executor()` is `pass`. KV cache profiling
 happens in the EngineCore, not the executor. So creating a standalone executor
 on the follower doesn't trigger any unwanted coordination.
 
-### `core.py` — EngineCore MoE vs non-MoE handling
+### `multiproc_executor.py:499-530` — Worker MQ init branching
 
-For MoE models (like Kimi K2), `DPEngineCoreProc` is used and `dp_size` is
-preserved. For non-MoE, `dp_size` is reset to 1 (replicas are independent).
-Our changes only affect MoE models where `dp_size > 1` is preserved through
-the worker initialization. Non-MoE multi-node replicas are a separate (unlikely)
-edge case.
+Workers already branch on `nnodes_within_dp`: single-node uses shared memory MQ,
+multi-node uses `get_inner_dp_world_group().create_mq_broadcaster()`. No changes
+needed — the existing MQ code handles cross-node communication correctly.
+
+---
+
+### 5. `vllm/v1/engine/core.py` — Don't reset `dp_size` for multi-node replicas
+
+**Before:** Non-MoE models always reset `dp_size=1`, `dp_rank=0`. This made
+replicas fully independent (each had its own torch.distributed group). This
+breaks when replicas span nodes because all replicas try to use the same
+`master_addr:master_port` with `world_size=16` — only 16 of 64 workers connect.
+
+**After:** When `nnodes_within_dp > 1`, preserve `dp_size` so workers compute
+correct global ranks (64-worker group). Uses `EngineCoreProc` (not
+`DPEngineCoreProc`) so replicas still run independently without DP wave
+coordination. The dp_size=1 reset is only applied for single-node replicas
+where isolated process groups are safe.
 
 ---
 
 ## Risks & Limitations
 
-1. **Non-MoE multi-node replicas:** The EngineCore resets `dp_size=1` for
-   non-MoE (core.py:993), which breaks `nnodes_within_dp` when replicas span
-   nodes. This was broken before our changes too. In practice, dense models
-   rarely need TP×PP > 8 WITH DP > 1.
-
-2. **Timing dependency:** Follower workers must start before the leader's
+1. **Timing dependency:** Follower workers must start before the leader's
    MessageQueue timeout. In practice, Slurm launches all nodes nearly
    simultaneously, but extreme delays could cause hangs.
 
-3. **Port conflicts:** All replicas share the same `master_addr:master_port`
-   for torch.distributed. This works because all 64 workers are in ONE global
-   group. If the non-MoE `dp_size=1` reset were used with multi-node replicas,
-   different replicas would conflict on the same port.
+2. **Startup overhead for non-MoE multi-node replicas:** With dp_size preserved,
+   all 64 workers join one global torch.distributed group at startup (vs.
+   independent 16-worker groups). This is a one-time cost, not a runtime cost —
+   at runtime, each replica's TP/PP communication stays within its own sub-groups.
 
 ---
 
@@ -261,5 +269,5 @@ edge case.
 | `vllm/v1/executor/multiproc_executor.py` | 119-122 | Loopback init_method (overridden, NOT changed) |
 | `vllm/v1/executor/multiproc_executor.py` | 127-137 | MQ creation on leader with `connect_ip=master_addr` |
 | `vllm/v1/executor/multiproc_executor.py` | 499-530 | Worker MQ init (shm vs inner_dp_world) |
-| `vllm/v1/engine/core.py` | 985-996 | MoE preserves dp_size, non-MoE resets to 1 |
+| `vllm/v1/engine/core.py` | 985-1003 | Preserve dp_size for multi-node replicas (CHANGED) |
 | `examples/online_serving/kimi_k2_multinode_dp.sbatch` | all | Example sbatch (CHANGED) |
