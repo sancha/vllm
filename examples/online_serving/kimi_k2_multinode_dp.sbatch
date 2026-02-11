@@ -34,6 +34,7 @@ COMMON_ARGS="
     --data-parallel-size $DP
     --nnodes 8
     --node-rank $SLURM_NODEID
+    --master-addr $HEAD_ADDR
     --data-parallel-address $HEAD_ADDR
     --data-parallel-rpc-port $DP_RPC_PORT
     --trust-remote-code
@@ -42,24 +43,29 @@ COMMON_ARGS="
 
 # ---- Auto-detect role from node rank ----
 #
-# Today's vLLM requires this to be split into head + headless.
-# With the proposed changes, vLLM would auto-infer from --node-rank:
+# vLLM auto-infers the node's role from --node-rank, --nnodes, and the
+# parallelism config:
 #
-#   nodes_per_replica = ceil(TP*PP / gpus_per_node) = ceil(16/8) = 2
+#   nodes_per_replica = TP*PP / gpus_per_node = 16/8 = 2
 #   is_dp_leader      = (node_rank % nodes_per_replica) == 0
 #   dp_rank            = node_rank // nodes_per_replica
 #   data_parallel_size_local = 1 if is_dp_leader else 0
 #
-# Node 0 is the head (API server + coordinator).
+# Node 0 is the head (API server + coordinator + DP leader for replica 0).
 # Even-numbered nodes (0,2,4,6) are DP leaders  -> run EngineCore + local workers.
 # Odd-numbered nodes  (1,3,5,7) are DP followers -> run workers only (no EngineCore).
+#
+# --master-addr is needed for torch.distributed init across all 64 workers.
+# --data-parallel-address is needed for ZMQ DP coordination between EngineCores.
 
 if [ "$SLURM_NODEID" -eq 0 ]; then
     # Head node: API server + coordinator + DP leader for replica 0
     vllm serve $MODEL $COMMON_ARGS \
         --port $API_PORT
 else
-    # All other nodes: headless
+    # All other nodes: headless.
+    # Leader nodes (even): spawn EngineCore + workers, handshake with head.
+    # Follower nodes (odd): spawn workers only (executor-only mode).
     vllm serve $MODEL $COMMON_ARGS \
         --headless
 fi

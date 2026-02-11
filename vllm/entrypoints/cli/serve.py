@@ -151,8 +151,14 @@ def run_headless(args: argparse.Namespace):
     parallel_config = vllm_config.parallel_config
     local_engine_count = parallel_config.data_parallel_size_local
 
-    if local_engine_count <= 0:
-        raise ValueError("data_parallel_size_local must be > 0 in headless mode")
+    if local_engine_count < 0:
+        raise ValueError("data_parallel_size_local must be >= 0 in headless mode")
+    if local_engine_count == 0 and parallel_config.node_rank_within_dp == 0:
+        raise ValueError(
+            "data_parallel_size_local must be > 0 for DP leader nodes "
+            "(node_rank_within_dp == 0) in headless mode. This node "
+            "appears to be a leader node but has no local engines."
+        )
 
     shutdown_requested = False
 

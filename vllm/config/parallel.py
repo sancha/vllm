@@ -465,12 +465,17 @@ class ParallelConfig:
 
     @property
     def nnodes_within_dp(self) -> int:
+        """Number of nodes per DP replica."""
         if self.nnodes == 1:
             return 1
-        data_parallel_node_size = (
-            self.data_parallel_size // self.data_parallel_size_local
-        )
-        return self.nnodes // data_parallel_node_size
+        # Compute from total parallelism config without depending on
+        # data_parallel_size_local (which is 0 on follower nodes in
+        # multi-node DP replicas).
+        total_gpus = self.data_parallel_size * self.world_size
+        gpus_per_node = total_gpus // self.nnodes
+        if self.world_size <= gpus_per_node:
+            return 1
+        return self.world_size // gpus_per_node
 
     @property
     def local_world_size(self) -> int:

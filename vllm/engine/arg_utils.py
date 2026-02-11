@@ -1534,9 +1534,30 @@ class EngineArgs:
                 )
             elif self.data_parallel_size_local is None:
                 # Infer data parallel size local for internal dplb:
-                self.data_parallel_size_local = max(
-                    local_world_size // world_size_within_dp, 1
-                )
+                if local_world_size >= world_size_within_dp:
+                    # Replica fits on one node (possibly multiple replicas
+                    # per node).
+                    self.data_parallel_size_local = (
+                        local_world_size // world_size_within_dp
+                    )
+                else:
+                    # Replica spans multiple nodes. Leader nodes (first
+                    # node in each replica group) host the EngineCore,
+                    # follower nodes only spawn executor workers.
+                    assert world_size_within_dp % local_world_size == 0, (
+                        f"world_size_within_dp ({world_size_within_dp}) "
+                        f"must be divisible by local_world_size "
+                        f"({local_world_size}) for multi-node DP replicas."
+                    )
+                    nodes_per_replica = (
+                        world_size_within_dp // local_world_size
+                    )
+                    is_dp_leader = (
+                        self.node_rank % nodes_per_replica == 0
+                    )
+                    self.data_parallel_size_local = (
+                        1 if is_dp_leader else 0
+                    )
         data_parallel_external_lb = (
             self.data_parallel_external_lb or self.data_parallel_rank is not None
         )
