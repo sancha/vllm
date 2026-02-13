@@ -185,7 +185,17 @@ return world_size // gpus_per_node
 **After:** Allow `dp_size_local=0` when `node_rank_within_dp > 0` (follower).
 Still raise if a leader node somehow has `dp_size_local=0`.
 
-### 4. `examples/online_serving/kimi_k2_multinode_dp.sbatch` — Added `--master-addr`
+### 4. `vllm/v1/executor/multiproc_executor.py` — `connect_ip=get_ip()`
+
+**Before:** `connect_ip=self.parallel_config.master_addr` — the MQ advertised
+node 0's IP (the global head) as the TCP endpoint for remote workers to connect.
+
+**After:** `connect_ip=get_ip()` — the MQ advertises the **current node's**
+routable IP. This is correct because each DP replica's leader creates its own
+MQ on its own node (e.g., replica 1's leader is node 2, not node 0). Remote
+workers on the follower node need to connect to their leader, not the head.
+
+### 5. `examples/online_serving/kimi_k2_multinode_dp.sbatch` — Added `--master-addr`
 
 `--master-addr $HEAD_ADDR` is required for `torch.distributed.init_process_group`
 across all 64 workers. Without it, `master_addr` defaults to `127.0.0.1` and the
@@ -200,8 +210,7 @@ cross-node rendezvous.
 
 The loopback `distributed_init_method` is **overridden** in
 `init_distributed_environment()` when `nnodes > 1`. Workers never actually use
-the loopback address for cross-node communication. This was the biggest
-"aha" moment in the investigation — it eliminated the riskiest change.
+the loopback address for cross-node communication.
 
 ### `multiproc_executor.py:226` — `_post_init_executor` is a no-op
 
@@ -267,7 +276,7 @@ where isolated process groups are safe.
 | `vllm/distributed/parallel_state.py` | 1214-1244 | distributed_init_method override for nnodes > 1 |
 | `vllm/distributed/parallel_state.py` | 1295-1311 | `_INNER_DP_WORLD` group creation |
 | `vllm/v1/executor/multiproc_executor.py` | 119-122 | Loopback init_method (overridden, NOT changed) |
-| `vllm/v1/executor/multiproc_executor.py` | 127-137 | MQ creation on leader with `connect_ip=master_addr` |
+| `vllm/v1/executor/multiproc_executor.py` | 132-137 | MQ `connect_ip=get_ip()` for leader's own IP (CHANGED) |
 | `vllm/v1/executor/multiproc_executor.py` | 499-530 | Worker MQ init (shm vs inner_dp_world) |
 | `vllm/v1/engine/core.py` | 985-1003 | Preserve dp_size for multi-node replicas (CHANGED) |
 | `examples/online_serving/kimi_k2_multinode_dp.sbatch` | all | Example sbatch (CHANGED) |

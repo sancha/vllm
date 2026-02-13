@@ -44,6 +44,7 @@ from vllm.logger import init_logger
 from vllm.tracing import instrument, maybe_init_worker_tracer
 from vllm.utils.network_utils import (
     get_distributed_init_method,
+    get_ip,
     get_loopback_ip,
     get_open_port,
 )
@@ -132,7 +133,7 @@ class MultiprocExecutor(Executor):
                 self.world_size,
                 self.local_world_size,
                 max_chunk_bytes=max_chunk_bytes,
-                connect_ip=self.parallel_config.master_addr,
+                connect_ip=get_ip(),
             )
             scheduler_output_handle = self.rpc_broadcast_mq.export_handle()
         # Create workers
